@@ -128,7 +128,9 @@ Take this application to production with support for both **x86** and **ARM64** 
 ## ✅ Solution
 
 Everything below documents what was actually built for this assignment, in
-this fork. The four required deliverables:
+this fork. **For the full design rationale behind every decision, see
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).** The four required
+deliverables:
 
 | Deliverable | Where |
 |---|---|
@@ -145,10 +147,10 @@ this fork. The four required deliverables:
 
 ### Beyond the assignment: a real AWS reference architecture
 
-`docs/ARCHITECTURE.md` §7's "Cloud deployment on AWS EKS" section is
-intentionally a summary. The full design — actually built as Terraform,
-Helm, and reusable GitHub Actions workflows, not just described — lives in
-three sibling repositories:
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §7's "Cloud deployment on AWS
+EKS" section is intentionally a summary. The full design — actually built as
+Terraform, Helm, and reusable GitHub Actions workflows, not just described —
+lives in three sibling repositories:
 
 | Repository | Owns |
 |---|---|
