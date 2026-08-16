@@ -284,55 +284,51 @@ ever become a problem, not something this assignment's scale needs yet.
 
 ## 7. Cloud deployment on AWS EKS
 
-Mapping each piece of this local solution to its EKS equivalent:
+This section stays intentionally brief — the full design (10 Terraform
+modules, exact IAM role trust policies, bootstrap ordering, the CloudFront →
+WAF → ALB request path, Karpenter/Graviton strategy) has actually been built
+and lives in **[`echo-pong-infrastructure`](https://github.com/nevomenashe15-sketch/echo-pong-infrastructure)**
+(`README.md` + `docs/architecture.md`), with the Kubernetes-layer half in
+**[`echo-pong-gitops`](https://github.com/nevomenashe15-sketch/echo-pong-gitops)**.
+This is the interview-summary version; that's the implementation.
 
-| Local / this repo | AWS EKS equivalent | Why the change |
+| Local / this repo | AWS EKS equivalent | One-line why |
 |---|---|---|
-| Kind cluster, single node | **EKS managed node groups** for baseline/system capacity + **Karpenter** for dynamic application capacity | Karpenter provisions right-sized nodes (including Graviton/arm64, matching this Deployment's soft arm64 preference) directly in response to unschedulable pods — faster and more bin-packing-efficient than Cluster Autoscaler's ASG-based model. A small managed node group still exists so the cluster can bootstrap itself (CoreDNS, controllers) without depending on Karpenter being healthy yet |
-| Fargate vs. managed nodes | **Managed node groups (+ Karpenter)**, not Fargate, for this workload | Fargate is attractive for its per-pod isolation and zero node management, but it doesn't support `DaemonSet`s, has slower cold starts (worse for a service already sensitive to startup timing, per §1), and loses the arm64/Graviton cost story this Deployment is already designed around. Fargate remains a reasonable choice for spiky, low-and-simple workloads that don't need any of that — just not this one |
-| k8s Secret (file-mounted) | **IRSA / EKS Pod Identity** + **External Secrets Operator**, syncing from **AWS Secrets Manager**, still mounted as a file | The mechanism the app expects (`SECRET_FILE_PATH` pointing at a mounted file) doesn't change at all — ESO's whole design point is to keep syncing *into* a normal k8s Secret so nothing downstream needs to change. What changes is where the value's source of truth lives (Secrets Manager, with rotation/audit/IAM-scoped access) instead of a manually-created cluster Secret, and the pod authenticates to AWS via IRSA/Pod Identity — a scoped IAM role bound to the ServiceAccount — instead of any mounted static AWS credential |
-| `ingress-nginx` (Kind) | **AWS Load Balancer Controller** reconciling the same `Ingress` object into an internet-facing **ALB** (IP target mode, routing straight to pod IPs, not NodePort) | The `Ingress` YAML itself barely changes — swap `ingressClassName` and add the controller's annotations (health-check path `/health`, HTTPS listener/redirect, target-type). The controller is what actually creates/updates AWS load balancer resources; the Ingress object is declarative intent, not a runtime proxy |
-| `NetworkPolicy` (unenforced by Kind's CNI) | VPC CNI's native `NetworkPolicy` enforcement (or Calico/Cilium as an add-on) | Called out explicitly rather than assumed: on EKS, whether this repo's `NetworkPolicy` manifest does anything at all depends on which policy engine is actually installed — it must be verified, not assumed, for whichever cluster this actually deploys to |
-| GHCR | **Amazon ECR** (see §8 for the fast-global-pull angle specifically) | Same immutable-tag, scan-on-push, least-privilege-policy story as GHCR; ECR is the natural registry once workloads run in AWS, mainly for the IAM-native pull auth and VPC-local pull path (§8) |
-| GitHub OIDC → GITHUB_TOKEN | **GitHub OIDC → a scoped AWS IAM role** (`aws-actions/configure-aws-credentials`, no static AWS keys) | Same "no long-lived credential" principle already used for GHCR, extended to AWS: the workflow assumes a narrowly-scoped IAM role via OIDC federation, time-limited to the job's run |
-| Cluster autoscaling: N/A (Kind is single-node, fixed) | **Karpenter** (preferred) or **Cluster Autoscaler** (ASG-based, if Karpenter isn't adopted) | Karpenter is the more modern, faster-provisioning, better-bin-packing option and was designed to replace Cluster Autoscaler for exactly this kind of stateless, horizontally-scaled service |
+| Kind, single node | EKS managed node group (bootstrap) + **Karpenter** (app capacity, Graviton-preferred) | Karpenter provisions right-sized nodes faster than ASG-based autoscaling; a small managed group keeps the cluster able to bootstrap itself independent of Karpenter's health |
+| k8s Secret (file-mounted) | **EKS Pod Identity/IRSA** + **External Secrets Operator** syncing from **Secrets Manager**, still mounted as a file | The app's `SECRET_FILE_PATH` contract never changes — only where the value's source of truth and rotation live |
+| `ingress-nginx` (Kind) | **AWS Load Balancer Controller** → internet-facing ALB (IP target mode) | Same `Ingress` object, different controller reconciling it |
+| `NetworkPolicy` (unenforced by Kind's CNI) | Depends on VPC CNI policy mode / Calico / Cilium — verified, not assumed | Same caveat as §3, just a different CNI to check |
+| GHCR | **Amazon ECR**, single registry + quarantine pair (not per-environment) | IAM-native pull auth, VPC-local pull path — see `echo-pong-infrastructure` README's "ECR: one registry" section for exactly why not per-environment |
+| GitHub OIDC → `GITHUB_TOKEN` | GitHub OIDC → scoped AWS IAM role, no static keys | Same "no long-lived credential" principle, extended to AWS |
 
 ---
 
 ## 8. Fast global image pulls (AWS-specific)
 
-For teams pulling this image from different regions/continents, three AWS
-mechanisms address different parts of the latency/cost problem:
+Two AWS mechanisms, for two genuinely different problems — detailed in
+`echo-pong-infrastructure/docs/architecture.md` §15 (VPC endpoints):
 
-1. **ECR cross-region replication** (or an ECR **pull-through cache** in
-   front of GHCR) — puts a copy of the image in the region closest to each
-   team, so a pull in `ap-southeast-1` doesn't cross an ocean to
-   `us-east-1` on every single pull. Pull-through cache is the lighter-touch
-   option if the image should keep living primarily in GHCR; full
-   replication is better once ECR becomes the actual source of truth.
-2. **VPC endpoints for ECR** (`ecr.api` and `ecr.dkr` interface endpoints,
-   **plus the S3 gateway endpoint** — ECR image layers are actually served
-   through S3, so the interface endpoints alone aren't sufficient) — keeps
-   pulls entirely inside the VPC instead of routing through a NAT Gateway,
-   which is both a latency win and a direct cost win (NAT Gateway
-   per-GB processing charges add up fast for image pulls at any real
-   scale).
-3. **CloudFront in front of the binary releases** (the GitHub Release
-   assets, or a mirrored S3 bucket) — this is the piece that matters
-   specifically for *binary* downloads rather than container pulls, since
-   GitHub Releases themselves aren't globally edge-cached the way an S3 +
-   CloudFront distribution would be. Not needed for the container image
-   path at all — that's what ECR replication/VPC endpoints already solve.
+1. **ECR cross-region replication / pull-through cache** — puts a copy of
+   the image near each team, instead of every pull crossing an ocean.
+2. **VPC endpoints for ECR** (`ecr.api` + `ecr.dkr` **and** the S3 gateway
+   endpoint — ECR layers are actually served through S3) — keeps pulls
+   inside the VPC instead of paying NAT Gateway per-GB charges.
 
-Container pulls and raw binary downloads are genuinely different problems
-here — worth stating plainly rather than reaching for one tool that only
-half-fits both.
+Binary downloads (GitHub Releases) are a separate problem from container
+pulls — CloudFront in front of an S3 mirror would be the fix there, but
+nothing currently needs it at this project's scale.
 
 ---
 
 ## 9. Image lifecycle management
 
-Retention policy, and how it ties back to the versioning scheme in §6:
+Retention policy, and how it ties back to the versioning scheme in §6. (The
+ECR equivalent, with the actual numbers used, lives in
+`echo-pong-infrastructure`'s README — `echo-pong`: keep last 30 `v*` /
+last 10 `sha-*` / untagged expire at 14 days; `echo-pong-quarantine`:
+everything expires at 14 days. Same reasoning, tuned for a registry that
+also has a GitOps-pinned "what's actually deployed" to diff against before
+deleting anything, which GHCR-only retention below can't do.)
 
 | Tag pattern | Retention |
 |---|---|
