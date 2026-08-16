@@ -143,6 +143,19 @@ this fork. The four required deliverables:
 > a named `--password` flag, not a bare positional argument. This solution
 > follows the code.
 
+### Beyond the assignment: a real AWS reference architecture
+
+`docs/ARCHITECTURE.md` §7's "Cloud deployment on AWS EKS" section is
+intentionally a summary. The full design — actually built as Terraform,
+Helm, and reusable GitHub Actions workflows, not just described — lives in
+three sibling repositories:
+
+| Repository | Owns |
+|---|---|
+| [`echo-pong-infrastructure`](https://github.com/nevomenashe15-sketch/echo-pong-infrastructure) | AWS: VPC, EKS, ECR, IAM, KMS, Route 53/ACM, CloudFront, WAF, Secrets Manager metadata, and the Argo CD install. |
+| [`echo-pong-gitops`](https://github.com/nevomenashe15-sketch/echo-pong-gitops) | Everything in the cluster after Argo CD exists: platform add-ons, Karpenter NodePools, the app's Helm release and Ingress. |
+| [`echo-pong-workflows`](https://github.com/nevomenashe15-sketch/echo-pong-workflows) | Reusable `workflow_call` CI/CD logic those repos assume. Not yet wired into this repo's own `ci.yml`/`release.yml`, which stay self-contained for the assignment submission. |
+
 ### Local development
 
 Requires Go 1.24.x, Docker with Buildx, `kind`, `kubectl`, and the linters
