@@ -1,0 +1,20 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echo-pong
+  namespace: echo-pong
+  labels:
+    app.kubernetes.io/name: echo-pong
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: echo-pong.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: echo-pong
+                port:
+                  name: http

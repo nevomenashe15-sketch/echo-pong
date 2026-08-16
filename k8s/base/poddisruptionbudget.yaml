@@ -1,0 +1,14 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: echo-pong
+  namespace: echo-pong
+  labels:
+    app.kubernetes.io/name: echo-pong
+spec:
+  # With replicas=2, this guarantees a voluntary disruption (node drain,
+  # cluster upgrade, descheduler) can never take the last ready pod down.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: echo-pong

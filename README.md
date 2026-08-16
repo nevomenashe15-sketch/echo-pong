@@ -122,3 +122,59 @@ Take this application to production with support for both **x86** and **ARM64** 
 ---
 
 **Good luck! 🚀**
+
+---
+
+## ✅ Solution
+
+Everything below documents what was actually built for this assignment, in
+this fork. The four required deliverables:
+
+| Deliverable | Where |
+|---|---|
+| `Dockerfile` (multi-stage, distroless nonroot, multi-arch) | [`Dockerfile`](Dockerfile) |
+| `k8s/` manifests (Namespace, Deployment, Service, Secret, ServiceAccount, NetworkPolicy, Ingress, PDB, HPA) | [`k8s/base/`](k8s/base/), local-only override in [`k8s/overlays/kind/`](k8s/overlays/kind/) |
+| `.github/workflows/` CI/CD | [`ci.yml`](.github/workflows/ci.yml), [`go-checks.yml`](.github/workflows/go-checks.yml), [`release.yml`](.github/workflows/release.yml) |
+| Written architecture/design docs | **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — deployment strategy, scaling, security, CI/CD walkthrough, multi-arch builds, versioning, AWS EKS mapping, fast global pulls, image lifecycle |
+
+> **One brief-vs-code discrepancy, followed as documented in
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md):** the brief above says the
+> CLI's secret is "passed as a command line argument"; the actual code uses
+> a named `--password` flag, not a bare positional argument. This solution
+> follows the code.
+
+### Local development
+
+Requires Go 1.24.x, Docker with Buildx, `kind`, `kubectl`, and the linters
+listed in `docs/ARCHITECTURE.md` — `make tool-versions` prints what's
+actually detected.
+
+```bash
+make help        # list every target
+make validate    # gofmt + go vet + golangci-lint + go test -race +
+                  # hadolint + actionlint + yamllint + kubeconform +
+                  # no-committed-secrets — the exact same checks CI runs
+make build        # native Go binary -> bin/echo-pong
+make image        # local single-platform image, docker-loaded
+make scan         # Trivy scan of that image, fails on HIGH/CRITICAL
+make verify        # the full one-command flow: validate -> scan -> Kind
+                    # cluster + ingress-nginx -> load image (never GHCR) ->
+                    # apply manifests -> wait for rollout -> curl /health,
+                    # /, /ping (no/wrong/correct token) -> cleanup
+```
+
+`make verify` never pulls the production `ghcr.io/nevomenashe15-sketch/
+echo-pong` image — the Kind overlay (`k8s/overlays/kind`) rewrites the
+image to a locally-built tag and sets `imagePullPolicy: Never`, so the
+kubelet is structurally forbidden from reaching out to any registry. See
+[`docs/ARCHITECTURE.md` §10](docs/ARCHITECTURE.md#10-local-verification-workflow)
+for the full explanation and what was and wasn't verified live.
+
+### Releasing
+
+Push a tag matching `v*` (e.g. `v0.1.0`) to trigger `release.yml`: build +
+push a multi-arch image to GHCR, Trivy-scan it (blocking), promote to
+semver + `latest` tags only on a clean scan, cross-compile binaries for
+linux/amd64 and linux/arm64, and publish a GitHub Release with everything
+attached. Ordinary commits to `main` only run `ci.yml` — no image is ever
+pushed outside of a tag push.

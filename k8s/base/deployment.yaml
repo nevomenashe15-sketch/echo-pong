@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo-pong
+  namespace: echo-pong
+  labels:
+    app.kubernetes.io/name: echo-pong
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: echo-pong
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # maxUnavailable=0 means kubelet must never remove a ready pod before
+      # a replacement is ready to take traffic — combined with replicas>=2
+      # and PodDisruptionBudget minAvailable=1, this is what actually
+      # guarantees zero-downtime rollouts (see docs/ARCHITECTURE.md).
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: echo-pong
+    spec:
+      serviceAccountName: echo-pong
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # ARM64 is preferred (cheaper, and the assignment calls it out) but not
+      # required — this is a soft preference so the pod still schedules fine
+      # on an amd64-only cluster (like this local Kind cluster).
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values:
+                      - arm64
+      containers:
+        - name: echo-pong
+          # Placeholder tag — never deploy this as-is. CI/CD and the local
+          # Kind overlay both override this via kustomize's `images:`
+          # transformer at deploy time, so this file always stays truthful
+          # about which repo the image comes from without hardcoding a
+          # specific release.
+          image: ghcr.io/nevomenashe15-sketch/echo-pong:0.0.0-unset
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "8080"
+            - name: SECRET_FILE_PATH
+              value: /var/run/secrets/echo-pong/token
+          volumeMounts:
+            - name: secret-token
+              mountPath: /var/run/secrets/echo-pong
+              readOnly: true
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+          # The app sleeps exactly 10s before it starts listening on /health.
+          # startupProbe absorbs that entire window: kubelet doesn't even
+          # start evaluating readiness/liveness until this succeeds, so the
+          # 10s sleep can never be mistaken for a hung or crashed container.
+          # initialDelaySeconds(5) + periodSeconds(3) * failureThreshold(10)
+          # gives up to 35s of headroom past the 5s starting point — enough
+          # slack for a busy node without masking a real startup failure.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 10
+          # Once startupProbe has succeeded, readiness/liveness take over.
+          # /health has no dependencies to check, so a short period is safe
+          # and gives fast feedback if a pod genuinely stops serving.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+      volumes:
+        - name: secret-token
+          secret:
+            secretName: echo-pong-secret
+            defaultMode: 0440
+            items:
+              - key: token
+                path: token

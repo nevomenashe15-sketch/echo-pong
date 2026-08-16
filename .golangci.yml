@@ -1,0 +1,32 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errcheck
+    - gosec
+    - govet
+    - ineffassign
+    - staticcheck
+    - unconvert
+    - unused
+  settings:
+    gosec:
+      # G706 (log injection via taint analysis) fires on every log.Printf call
+      # that substitutes any variable, including net/http-derived connection
+      # metadata (RemoteAddr) and operator-supplied config (PORT, SECRET_FILE_PATH).
+      # None of this app's logged values come from unsanitized request bodies or
+      # headers, so the rule has no true positives here and is disabled globally
+      # rather than annotated at every call site. Path-related findings (G304/G703)
+      # are still enforced and suppressed inline only where justified.
+      excludes:
+        - G706
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

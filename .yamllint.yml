@@ -1,0 +1,23 @@
+---
+extends: default
+
+yaml-files:
+  - "*.yaml"
+  - "*.yml"
+  - ".yamllint.yml"
+
+rules:
+  line-length:
+    max: 120
+    level: warning
+  document-start: disable
+  truthy:
+    allowed-values: ["true", "false"]
+    # GitHub Actions workflows require the literal key `on:`, which YAML 1.1
+    # parsers would otherwise read as boolean true — check values, not keys.
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1
+
+ignore: |
+  .git/

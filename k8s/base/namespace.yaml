@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: echo-pong
+  labels:
+    app.kubernetes.io/name: echo-pong
+    # Pod Security Admission: enforce the "restricted" profile at the API
+    # server so the Deployment's securityContext isn't just a convention —
+    # any pod that doesn't meet it (non-root, no added capabilities, etc.)
+    # is rejected on create, not just flagged.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

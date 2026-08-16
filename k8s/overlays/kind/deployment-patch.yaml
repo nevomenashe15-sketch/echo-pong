@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo-pong
+  namespace: echo-pong
+spec:
+  template:
+    spec:
+      containers:
+        # imagePullPolicy=Never is the actual safety mechanism here: even if
+        # the image name/tag below were somehow wrong, the kubelet is
+        # forbidden from pulling anything over the network — it must already
+        # be loaded into the Kind node via `kind load docker-image`. This is
+        # what makes it impossible for a local test run to reach GHCR.
+        - name: echo-pong
+          imagePullPolicy: Never

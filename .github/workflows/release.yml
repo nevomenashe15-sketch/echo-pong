@@ -1,0 +1,169 @@
+name: Release
+
+# Tag pushes only (e.g. v1.2.3) — nothing here runs on ordinary commits to
+# main, so every image/binary this workflow produces is tied to a specific,
+# reviewable release point, never a moving branch head.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.24"
+  IMAGE_NAME: echo-pong
+  TRIVY_VERSION: "0.70.0" # https://github.com/aquasecurity/trivy/releases/tag/v0.70.0
+
+jobs:
+  go-checks:
+    uses: ./.github/workflows/go-checks.yml
+
+  # Builds the multi-arch image and pushes it under a single provisional,
+  # sha-based tag — never `latest`, never the release's semver tag. Trivy
+  # then scans that exact, already-pushed digest. Only if the scan passes
+  # does the `promote` job attach the real release tags to it (see below).
+  # This is what makes the scan an actual release gate rather than a report:
+  # a failing scan means the semver/latest tags simply never get created,
+  # and nothing rebuilds in between scan and promotion.
+  build-and-scan:
+    name: build, push (provisional tag), scan
+    needs: go-checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push provisional (sha-tagged) image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+
+      - name: Install Trivy
+        run: |
+          curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz" \
+            | tar xz -C /usr/local/bin trivy
+
+      - name: Scan pushed digest — linux/amd64 (fails on HIGH/CRITICAL)
+        run: |
+          trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed \
+            --platform linux/amd64 \
+            "ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+
+      - name: Scan pushed digest — linux/arm64 (fails on HIGH/CRITICAL)
+        run: |
+          trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed \
+            --platform linux/arm64 \
+            "ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+
+  # Only reached if build-and-scan (including both Trivy scans) succeeded.
+  # Re-tags the exact scanned digest — no rebuild — with the real semver
+  # tags and `latest`.
+  promote:
+    name: promote scanned digest to release tags
+    needs: build-and-scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute release tags (semver + latest)
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+
+      - name: Attach release tags to the already-scanned digest
+        run: |
+          args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && args+=("-t" "$tag")
+          done <<< "${{ steps.meta.outputs.tags }}"
+          docker buildx imagetools create "${args[@]}" \
+            "ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ needs.build-and-scan.outputs.digest }}"
+
+  binaries:
+    name: cross-compile binary (${{ matrix.goarch }})
+    needs: go-checks
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          out="dist/echo-pong-${{ github.ref_name }}-linux-${{ matrix.goarch }}"
+          go build -trimpath -ldflags="-s -w" -o "$out" .
+          sha256sum "$out" > "$out.sha256"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binaries-${{ matrix.goarch }}
+          path: dist/*
+
+  github-release:
+    name: publish GitHub Release
+    needs: [promote, binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: binaries-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          generate_release_notes: true
+          files: dist/*
+          body: |
+            Container image: `ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}`
+            (also tagged `latest`; digest-scanned clean for HIGH/CRITICAL on both linux/amd64 and linux/arm64 before this tag was attached — see the `${{ github.ref_name }}` workflow run for the scan logs.)

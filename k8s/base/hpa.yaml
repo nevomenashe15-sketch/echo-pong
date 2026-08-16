@@ -1,0 +1,33 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: echo-pong
+  namespace: echo-pong
+  labels:
+    app.kubernetes.io/name: echo-pong
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: echo-pong
+  # minReplicas matches the Deployment's own replica count so the HPA never
+  # scales below what PDB/RollingUpdate already assume. maxReplicas=6 is a
+  # deliberately small ceiling for a stateless, near-zero-cost ping/pong
+  # handler — see docs/ARCHITECTURE.md for the reasoning and what a
+  # higher-traffic service would do differently (custom/RPS metrics).
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      # Wait 5 minutes of sustained low usage before removing a replica, so
+      # a brief dip doesn't cause flapping under bursty traffic.
+      stabilizationWindowSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 0

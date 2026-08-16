@@ -1,0 +1,9 @@
+.git
+.github
+k8s
+docs
+*.md
+.golangci.yml
+.yamllint.yml
+Makefile
+main_test.go

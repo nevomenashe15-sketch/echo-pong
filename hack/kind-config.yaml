@@ -1,0 +1,22 @@
+# Local Kind cluster used only by `make kind-up` / `make deploy-local`.
+# Never referenced by CI or by any production manifest.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: echo-pong
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      # Host 8080/8443 (not 80/443) so this doesn't need root and doesn't
+      # collide with anything already bound to the standard ports.
+      - containerPort: 80
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 8443
+        protocol: TCP

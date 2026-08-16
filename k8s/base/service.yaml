@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo-pong
+  namespace: echo-pong
+  labels:
+    app.kubernetes.io/name: echo-pong
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: echo-pong
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

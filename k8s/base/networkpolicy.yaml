@@ -1,0 +1,36 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: echo-pong
+  namespace: echo-pong
+  labels:
+    app.kubernetes.io/name: echo-pong
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: echo-pong
+  policyTypes:
+    - Ingress
+    - Egress
+  # Only the ingress controller may reach the app — this is the "no direct
+  # internet access, use ingress/proxy" requirement. Assumes an ingress
+  # controller (e.g. ingress-nginx) running in a namespace labeled
+  # kubernetes.io/metadata.name=ingress-nginx (the label Kubernetes has
+  # auto-applied to every namespace since 1.21).
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+  # No egress rules at all: this app makes zero outbound calls (verified
+  # from main.go — it only reads a local file and serves HTTP), so egress
+  # is denied entirely rather than narrowed to "what's needed" because
+  # nothing is needed. Note: kubelet-initiated probe traffic (startup/
+  # readiness/liveness) reaches the pod from the node directly and is not
+  # egress traffic from the pod's point of view, so it isn't affected by
+  # this policy — but whether NetworkPolicy is enforced at all, and how CNIs
+  # treat kubelet traffic, is CNI-dependent (see docs/ARCHITECTURE.md).
+  egress: []
