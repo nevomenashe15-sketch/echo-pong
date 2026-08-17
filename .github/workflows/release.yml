@@ -129,6 +129,83 @@ jobs:
           docker buildx imagetools create "${args[@]}" \
             "ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}"
 
+  # =============================================================================
+  # DIRECT DEPLOYMENT (CI validation only) -- see docs/ARCHITECTURE.md's
+  # "Two deployment options" section for the full explanation.
+  #
+  # This is deliberately NOT how dev/staging/production actually get
+  # deployed -- that's still exclusively Argo CD, reading echo-pong-gitops,
+  # via the continuous/tag-triggered chains in echo-pong-workflows. Nothing
+  # here runs `kubectl apply` against any real cluster; Kind stands up an
+  # ephemeral, disposable one that exists only for the lifetime of this job.
+  #
+  # What it proves that nothing else in this pipeline does: the promote job
+  # above only proves the digest exists in the production ECR/GHCR repo with
+  # the right tags attached -- it never proves the image is actually
+  # PULLABLE (e.g. if the package were accidentally private, this would be
+  # the first thing to catch that) or that the app runs correctly once
+  # scheduled. imagePullPolicy here is deliberately left at base's default
+  # (IfNotPresent, i.e. a real pull), unlike k8s/overlays/kind's
+  # imagePullPolicy: Never -- the whole point is to prove a real GHCR pull
+  # works, not to avoid one.
+  # =============================================================================
+  k8s-smoke-test:
+    name: k8s smoke test (direct deploy, CI only)
+    needs: promote
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install kind
+        run: |
+          curl -sSfL -o /usr/local/bin/kind \
+            "https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64"
+          chmod +x /usr/local/bin/kind
+
+      - name: Install kubectl
+        run: |
+          curl -sSfL -o /usr/local/bin/kubectl \
+            "https://dl.k8s.io/release/v1.31.14/bin/linux/amd64/kubectl"
+          chmod +x /usr/local/bin/kubectl
+
+      - name: Install kustomize
+        run: |
+          curl -sSfL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.5.0/kustomize_v5.5.0_linux_amd64.tar.gz" \
+            | tar xz -C /usr/local/bin kustomize
+
+      - name: Create Kind cluster
+        run: kind create cluster --name echo-pong-release-smoke --wait 120s
+
+      - name: Set the real published image tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cd k8s/overlays/release-smoke-test
+          # github.ref_name is the raw tag (e.g. v1.2.3); the semver tag
+          # promote actually attached has the leading "v" stripped (docker/
+          # metadata-action's type=semver,pattern={{version}} convention) --
+          # strip it here too so this pulls the exact tag that exists.
+          kustomize edit set image \
+            "ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${RELEASE_TAG#v}"
+
+      - name: Generate throwaway local test secret (CI only, never a real credential)
+        run: echo -n "release-smoke-test-token-$(date +%s)" > k8s/overlays/release-smoke-test/.secret.local
+
+      - name: Deploy via Kustomize
+        run: |
+          kubectl apply -k k8s/overlays/release-smoke-test
+          kubectl -n echo-pong rollout status deploy/echo-pong --timeout=180s
+
+      - name: Smoke test
+        run: bash hack/release-smoke-test.sh kind-echo-pong-release-smoke
+
+      - name: Tear down Kind cluster
+        if: always()
+        run: kind delete cluster --name echo-pong-release-smoke || true
+
   binaries:
     name: cross-compile binary (${{ matrix.goarch }})
     needs: go-checks
@@ -160,7 +237,7 @@ jobs:
 
   github-release:
     name: publish GitHub Release
-    needs: [promote, binaries]
+    needs: [promote, binaries, k8s-smoke-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write

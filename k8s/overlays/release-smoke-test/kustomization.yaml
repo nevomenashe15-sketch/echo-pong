@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Used only by .github/workflows/release.yml's k8s-smoke-test job, against an
+# ephemeral Kind cluster created and destroyed within that job. Unlike
+# k8s/overlays/kind (local dev — never touches GHCR, imagePullPolicy: Never),
+# this overlay deliberately DOES pull the real image from GHCR by tag. The
+# whole point of this overlay is to prove the just-published release
+# artifact is actually pullable and deployable, not just that manifests
+# render — so it intentionally does NOT override imagePullPolicy away from
+# base's default (IfNotPresent), and the CI job sets the real tag at runtime
+# via `kustomize edit set image` (the tag doesn't exist until the release
+# workflow is actually running, so it can't be committed here).
+resources:
+  - ../../base
+
+# Same throwaway-local-file pattern as k8s/overlays/kind: the CI job
+# generates .secret.local immediately before applying, and it's gitignored
+# — never a real credential, never committed.
+secretGenerator:
+  - name: echo-pong-secret
+    namespace: echo-pong
+    type: Opaque
+    files:
+      - token=.secret.local
+
+generatorOptions:
+  disableNameSuffixHash: true

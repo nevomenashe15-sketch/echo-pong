@@ -9,7 +9,8 @@ KIND_CLUSTER := echo-pong
 NAMESPACE    := echo-pong
 KUBECTX      := kind-$(KIND_CLUSTER)
 K8S_VERSION  := 1.31.0
-SECRET_FILE  := k8s/overlays/kind/.secret.local
+SECRET_FILE       := k8s/overlays/kind/.secret.local
+SMOKE_SECRET_FILE := k8s/overlays/release-smoke-test/.secret.local
 
 export PATH := $(HOME)/.local/bin:$(HOME)/.local/go/bin:$(HOME)/go/bin:$(PATH)
 
@@ -84,15 +85,17 @@ scan: image ## Trivy-scan the local image; fails on any HIGH/CRITICAL finding
 ## --- k8s manifest validation ----------------------------------------------
 
 .PHONY: k8s-render
-k8s-render: $(SECRET_FILE) ## Render base + kind overlay via kustomize
+k8s-render: $(SECRET_FILE) $(SMOKE_SECRET_FILE) ## Render base + kind + release-smoke-test overlays via kustomize
 	mkdir -p $(BIN_DIR)
 	kubectl kustomize k8s/base > $(BIN_DIR)/k8s-base.rendered.yaml
 	kubectl kustomize k8s/overlays/kind > $(BIN_DIR)/k8s-kind.rendered.yaml
+	kubectl kustomize k8s/overlays/release-smoke-test > $(BIN_DIR)/k8s-release-smoke-test.rendered.yaml
 
 .PHONY: k8s-validate
 k8s-validate: k8s-render ## Strict kubeconform validation of rendered manifests
 	kubeconform -strict -kubernetes-version $(K8S_VERSION) -summary $(BIN_DIR)/k8s-base.rendered.yaml
 	kubeconform -strict -kubernetes-version $(K8S_VERSION) -summary $(BIN_DIR)/k8s-kind.rendered.yaml
+	kubeconform -strict -kubernetes-version $(K8S_VERSION) -summary $(BIN_DIR)/k8s-release-smoke-test.rendered.yaml
 
 .PHONY: yaml-lint
 yaml-lint: ## yamllint over k8s manifests and workflow files
@@ -138,6 +141,10 @@ kind-up: ## Create the local Kind cluster and install ingress-nginx
 $(SECRET_FILE):
 	@echo -n "kind-local-test-token-$$(date +%s)" > $(SECRET_FILE)
 	@echo "generated throwaway local test secret at $(SECRET_FILE) (gitignored, never a real credential)"
+
+$(SMOKE_SECRET_FILE):
+	@echo -n "release-smoke-test-token-$$(date +%s)" > $(SMOKE_SECRET_FILE)
+	@echo "generated throwaway local test secret at $(SMOKE_SECRET_FILE) (gitignored, never a real credential)"
 
 .PHONY: deploy-local
 deploy-local: image $(SECRET_FILE) ## Load the local image into Kind and apply manifests
