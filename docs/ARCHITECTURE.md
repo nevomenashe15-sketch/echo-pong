@@ -287,6 +287,45 @@ GitHub-hosted cost is small enough that self-hosting mainly buys back
 minutes, not dollars — worth doing if the per-run wait time itself is the
 pain point, not primarily a cost optimization.
 
+### Two deployment options — and only one of them is real deployment
+
+`release.yml` demonstrates two distinct paths, and it's worth being precise
+in an interview about which one actually puts the app in front of users:
+
+```
+Option 1 — Direct deployment (CI validation only)
+GitHub Actions → Kind/Kubernetes → Smoke Test
+
+Option 2 — GitOps deployment (the real one)
+GitHub Actions → GitOps Repo → Argo CD → Kubernetes
+```
+
+**Option 1** is the `k8s-smoke-test` job in this repo's own `release.yml`:
+it spins up a disposable Kind cluster inside the CI runner, deploys
+`k8s/base` via Kustomize with the exact image tag `promote` just published,
+and runs smoke tests against `/health`, `/`, `/ping`, and `/pong`. It exists
+to answer one question automatically on every release — *is the artifact
+that was just published actually pullable and functional* — and it fails
+the release (blocks `github-release`) if not. The cluster is destroyed at
+the end of the job regardless of outcome. **This never touches any real
+environment.** It's CI validation, not a deployment mechanism.
+
+**Option 2** is the actual deployment path, implemented in the sibling
+`echo-pong-workflows`/`echo-pong-gitops`/`echo-pong-infrastructure` repos
+(see §7 below): CI never runs `kubectl apply` against a real cluster at
+all. It opens a pull request against `echo-pong-gitops` updating an image
+digest, and Argo CD — reading that repo, running against the real EKS
+cluster — is what actually reconciles the change onto Kubernetes. Dev
+auto-syncs; production requires a human to merge and (per its own sync
+policy) trigger the sync.
+
+The two exist side by side deliberately, not as alternatives to pick
+between: Option 1 catches "the image is broken or unpullable" within
+minutes, entirely inside this repo's own pipeline; Option 2 is how a real
+environment's state actually changes. Neither replaces the other, and
+Option 1 was added without touching Option 2 — the GitOps flow is exactly
+as it was before this section existed.
+
 ---
 
 ## 5. Multi-architecture build approach

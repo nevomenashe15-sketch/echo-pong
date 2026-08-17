@@ -193,3 +193,10 @@ semver + `latest` tags only on a clean scan, cross-compile binaries for
 linux/amd64 and linux/arm64, and publish a GitHub Release with everything
 attached. Ordinary commits to `main` only run `ci.yml` — no image is ever
 pushed outside of a tag push.
+
+`release.yml` also runs a **direct-deploy smoke test** (Kind, `kubectl
+apply -k`, the real just-published GHCR image) as a CI-only gate before
+the GitHub Release is published — this is separate from, and doesn't
+replace, the actual GitOps/Argo CD deployment path. See
+[`docs/ARCHITECTURE.md` §4](docs/ARCHITECTURE.md#4-cicd-pipeline)'s "Two
+deployment options" subsection for the full explanation.
