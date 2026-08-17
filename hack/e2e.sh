@@ -29,7 +29,14 @@ trap cleanup EXIT
 
 ready=0
 for _ in $(seq 1 30); do
-  if curl -s -o /dev/null "http://127.0.0.1:${LOCAL_PORT}/health" -H "Host: ${HOST_HEADER}"; then
+  # Check the actual status code, not just that curl connected: right after
+  # `kubectl apply`, ingress-nginx can take a few seconds to reconcile the
+  # new Ingress, during which a request can get a default-backend 404/503
+  # instead of a connection failure — curl still exits 0 on that, so
+  # checking only the exit code could declare "ready" one full request
+  # before the app is actually reachable.
+  code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${LOCAL_PORT}/health" -H "Host: ${HOST_HEADER}" || true)
+  if [ "$code" = "200" ]; then
     ready=1
     break
   fi

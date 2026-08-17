@@ -142,6 +142,18 @@ VPC CNI's native policy enforcement mode enabled or a policy-capable CNI
 add-on (Calico, Cilium) layered in. This is called out explicitly rather
 than silently assumed — see [§6](#6-cloud-deployment-on-aws-eks).
 
+A sharper version of the same caveat: the `ingress` rule only allows
+traffic from the ingress-controller namespace, but kubelet-originated
+`startupProbe`/`readinessProbe`/`livenessProbe` traffic is *also* ingress
+from the pod's point of view — it doesn't come from that namespace. On a
+CNI that enforces `NetworkPolicy` comprehensively (including
+kubelet-sourced connections), that traffic could be blocked exactly like
+any other unlisted source, silently turning every pod `NotReady` and
+crash-looping. Whether a given CNI exempts kubelet traffic from policy
+enforcement is implementation-specific and not something to assume from
+either this doc or the manifest's own comment — verify it against whatever
+cluster this actually deploys to before relying on it.
+
 ---
 
 ## 4. CI/CD pipeline

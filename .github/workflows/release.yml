@@ -21,14 +21,16 @@ jobs:
     uses: ./.github/workflows/go-checks.yml
 
   # Builds the multi-arch image and pushes it under a single provisional,
-  # sha-based tag — never `latest`, never the release's semver tag. Trivy
-  # then scans that exact, already-pushed digest. Only if the scan passes
-  # does the `promote` job attach the real release tags to it (see below).
-  # This is what makes the scan an actual release gate rather than a report:
-  # a failing scan means the semver/latest tags simply never get created,
-  # and nothing rebuilds in between scan and promotion.
-  build-and-scan:
-    name: build, push (provisional tag), scan
+  # sha-based tag — never `latest`, never the release's semver tag. The
+  # `scan` job (below) then scans that exact, already-pushed digest, one
+  # platform per matrix leg in parallel rather than sequential steps in one
+  # job — halves the wall-clock cost of this gate on every tagged release.
+  # Only if every scan leg passes does `promote` attach the real release
+  # tags to it. This is what makes the scan an actual release gate rather
+  # than a report: a failing scan means the semver/latest tags simply never
+  # get created, and nothing rebuilds in between scan and promotion.
+  build:
+    name: build, push (provisional tag)
     needs: go-checks
     runs-on: ubuntu-latest
     permissions:
@@ -57,29 +59,41 @@ jobs:
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
 
+  scan:
+    name: scan pushed digest (${{ matrix.platform }})
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
       - name: Install Trivy
         run: |
           curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz" \
             | tar xz -C /usr/local/bin trivy
 
-      - name: Scan pushed digest — linux/amd64 (fails on HIGH/CRITICAL)
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Scan pushed digest (fails on HIGH/CRITICAL)
         run: |
           trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed \
-            --platform linux/amd64 \
-            "ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+            --platform "${{ matrix.platform }}" \
+            "ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}"
 
-      - name: Scan pushed digest — linux/arm64 (fails on HIGH/CRITICAL)
-        run: |
-          trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed \
-            --platform linux/arm64 \
-            "ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
-
-  # Only reached if build-and-scan (including both Trivy scans) succeeded.
+  # Only reached if build succeeded AND every scan matrix leg passed.
   # Re-tags the exact scanned digest — no rebuild — with the real semver
   # tags and `latest`.
   promote:
     name: promote scanned digest to release tags
-    needs: build-and-scan
+    needs: [build, scan]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -113,7 +127,7 @@ jobs:
             [ -n "$tag" ] && args+=("-t" "$tag")
           done <<< "${{ steps.meta.outputs.tags }}"
           docker buildx imagetools create "${args[@]}" \
-            "ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ needs.build-and-scan.outputs.digest }}"
+            "ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}"
 
   binaries:
     name: cross-compile binary (${{ matrix.goarch }})

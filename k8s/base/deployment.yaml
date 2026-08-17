@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: echo-pong
-  namespace: echo-pong
   labels:
     app.kubernetes.io/name: echo-pong
 spec:
@@ -60,9 +59,14 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+          # PORT is intentionally NOT set here: main.go defaults to 8080 when
+          # PORT is unset, which is exactly containerPort above. Two
+          # independently hardcoded "8080" literals (here and in
+          # containerPort) could silently drift if someone "obviously" edits
+          # only the env var — removing one side of the duplication removes
+          # the drift risk entirely instead of relying on both staying in
+          # sync by convention.
           env:
-            - name: PORT
-              value: "8080"
             - name: SECRET_FILE_PATH
               value: /var/run/secrets/echo-pong/token
           volumeMounts:

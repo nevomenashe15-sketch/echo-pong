@@ -2,7 +2,6 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: echo-pong
-  namespace: echo-pong
   labels:
     app.kubernetes.io/name: echo-pong
 spec:

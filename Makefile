@@ -107,10 +107,15 @@ workflow-lint: ## actionlint over GitHub Actions workflows
 	actionlint
 
 .PHONY: no-committed-secrets
+# Matches common secret-shaped keys, not just "token:" -- a value under
+# password/secret/apiKey/authToken etc. is just as real a leak, and a
+# regex that only caught the one key name this app happens to use would
+# give false confidence against every other key name.
+SECRET_KEY_PATTERN := ^\s*(token|password|passwd|secret|api[_-]?key|auth[_-]?token|access[_-]?key|private[_-]?key|credential):\s*[A-Za-z0-9+/=_-]{20,}
 no-committed-secrets: ## Fail if any tracked file looks like a real Secret value
-	@if git grep -nIE '^\s*token:\s*[A-Za-z0-9+/=_-]{20,}' -- ':!k8s/secret.example.yaml' | grep -q .; then \
+	@if git grep -niE '$(SECRET_KEY_PATTERN)' -- ':!k8s/secret.example.yaml' | grep -q .; then \
 		echo "Possible committed secret value found:"; \
-		git grep -nIE '^\s*token:\s*[A-Za-z0-9+/=_-]{20,}' -- ':!k8s/secret.example.yaml'; \
+		git grep -niE '$(SECRET_KEY_PATTERN)' -- ':!k8s/secret.example.yaml'; \
 		exit 1; \
 	fi
 	@echo "no-committed-secrets: OK"

@@ -2,7 +2,6 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: echo-pong
-  namespace: echo-pong
   labels:
     app.kubernetes.io/name: echo-pong
 spec:
@@ -17,6 +16,18 @@ spec:
   # controller (e.g. ingress-nginx) running in a namespace labeled
   # kubernetes.io/metadata.name=ingress-nginx (the label Kubernetes has
   # auto-applied to every namespace since 1.21).
+  #
+  # IMPORTANT, verify before relying on this in a real cluster: this rule
+  # does not list an explicit allowance for kubelet-originated probe
+  # traffic (startup/readiness/liveness all connect to the pod the same way
+  # any other client would, which is ingress from the pod's point of view).
+  # Whether that traffic is exempt from NetworkPolicy enforcement is a
+  # property of the specific CNI/policy engine in use, not something
+  # guaranteed by the NetworkPolicy spec itself or by this manifest — it
+  # must be verified against whatever cluster this actually deploys to
+  # (test a policy-enforcing pod on a staging cluster before assuming it
+  # works), not assumed from this comment. If probes start failing only
+  # once NetworkPolicy is enforced, this is the first place to look.
   ingress:
     - from:
         - namespaceSelector:
