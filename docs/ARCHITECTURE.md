@@ -228,6 +228,65 @@ that's exactly the kind of unpromoted artifact the retention policy in
 job's own `permissions: packages: write`), not a personal access token.
 Nothing in any workflow file is a committed credential.
 
+### Speeding this up with a self-hosted runner
+
+Every job today runs on a **fresh GitHub-hosted `ubuntu-latest` VM**, so every
+single run pays for tool installation from zero: `go-checks.yml` compiles
+`golangci-lint` from source via `go install` (a real cost — see
+`docs/ARCHITECTURE.md`'s own tooling notes; this alone is a noticeable chunk
+of that job's wall-clock time), `ci.yml` downloads `hadolint`, `actionlint`,
+and `kubeconform` as release binaries on every push/PR, and `release.yml`
+downloads Trivy on every tag push. None of that is cached between runs —
+`actions/setup-go`'s module cache is the only caching currently configured
+anywhere in this pipeline.
+
+A **self-hosted runner** (a persistent VM/container you register against this
+repo, instead of a GitHub-provisioned ephemeral one) removes that repeated
+cost two ways:
+
+1. **Pre-install once, reuse forever.** golangci-lint, hadolint, actionlint,
+   kubeconform, and Trivy get installed on the runner image itself (or in a
+   long-lived Docker layer/volume the runner reuses), so the "Install X"
+   steps in every workflow either disappear entirely or collapse to a
+   version-check no-op. This is the same mechanism `make validate` already
+   gets "for free" on a developer's own machine (the tools are just already
+   there) — a self-hosted runner is that same property applied to CI.
+2. **Warm caches survive between runs.** Docker layer cache, the Go build
+   cache, and the module cache all persist on disk across jobs instead of
+   starting cold on a new VM every time, which speeds up `go build`/`go
+   test` and the `docker buildx build` steps too, not just the linter
+   installs.
+
+**Trade-offs worth being explicit about before switching:**
+
+- **You now own patching and security of the runner**, not GitHub. A
+  compromised runner has whatever access its registered token grants — for
+  a public repo accepting fork PRs, running untrusted PR code on
+  self-hosted infrastructure is a well-known attack path (the PR's code
+  runs *on your machine*, not an ephemeral sandboxed one). This repo's
+  `ci.yml` currently runs on every PR including forks; moving to
+  self-hosted without also restricting which workflows/triggers are
+  allowed to use it would widen that exposure.
+- **Ephemeral, not persistent, is the safer self-hosted pattern** —
+  provision a fresh runner per job (or per run) that tears down afterward,
+  so a compromised job can't persist access or poison the next run's
+  cache. This is exactly what Actions Runner Controller (ARC) on
+  Kubernetes provides, and is the direction the production extension in
+  `echo-pong-infrastructure`/`echo-pong-workflows` would take this if
+  adopted — **not currently built**, only the reusable workflow contracts
+  exist today; see those repos' own docs for what's actually implemented
+  versus planned.
+- **Cost shifts from "included" to "something you provision and pay for
+  directly"** — GitHub-hosted minutes are bundled/metered by GitHub;
+  self-hosted means EC2 (or equivalent) uptime cost, which only nets out
+  positive once CI run volume is high enough that the time saved outweighs
+  the infrastructure to run and maintain.
+
+For this repo's actual current scale (a handful of runs per push), the
+GitHub-hosted cost is small enough that self-hosting mainly buys back
+minutes, not dollars — worth doing if the per-run wait time itself is the
+pain point, not primarily a cost optimization.
+
 ---
 
 ## 5. Multi-architecture build approach
