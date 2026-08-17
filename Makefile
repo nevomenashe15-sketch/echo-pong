@@ -91,11 +91,28 @@ k8s-render: $(SECRET_FILE) $(SMOKE_SECRET_FILE) ## Render base + kind + release-
 	kubectl kustomize k8s/overlays/kind > $(BIN_DIR)/k8s-kind.rendered.yaml
 	kubectl kustomize k8s/overlays/release-smoke-test > $(BIN_DIR)/k8s-release-smoke-test.rendered.yaml
 
+# kubeconform's default -schema-location fetches one HTTP request PER
+# resource kind from raw.githubusercontent.com. That CDN has proven
+# unreliable enough in practice (persistent 503s/timeouts, reproduced both
+# locally and in a real GitHub Actions run) to make it a bad foundation for
+# a CI gate that's supposed to mean something -- a spurious failure here
+# looks identical to a real one. Cloning the schema set once via git (a
+# different GitHub code path, not the raw-content CDN) and validating
+# against that local copy removes the dependency on that specific CDN's
+# reliability entirely, without changing what's actually being checked.
+K8S_SCHEMA_DIR := $(BIN_DIR)/k8s-schemas
+$(K8S_SCHEMA_DIR):
+	git clone --depth 1 --filter=blob:none --sparse \
+		https://github.com/yannh/kubernetes-json-schema.git $(K8S_SCHEMA_DIR)
+	cd $(K8S_SCHEMA_DIR) && git sparse-checkout set v$(K8S_VERSION)-standalone-strict
+
 .PHONY: k8s-validate
-k8s-validate: k8s-render ## Strict kubeconform validation of rendered manifests
-	kubeconform -strict -kubernetes-version $(K8S_VERSION) -summary $(BIN_DIR)/k8s-base.rendered.yaml
-	kubeconform -strict -kubernetes-version $(K8S_VERSION) -summary $(BIN_DIR)/k8s-kind.rendered.yaml
-	kubeconform -strict -kubernetes-version $(K8S_VERSION) -summary $(BIN_DIR)/k8s-release-smoke-test.rendered.yaml
+k8s-validate: k8s-render $(K8S_SCHEMA_DIR) ## Strict kubeconform validation of rendered manifests
+	kubeconform -strict -kubernetes-version $(K8S_VERSION) -summary \
+		-schema-location "$(K8S_SCHEMA_DIR)/{{.NormalizedKubernetesVersion}}-standalone-strict/{{.ResourceKind}}{{.KindSuffix}}.json" \
+		$(BIN_DIR)/k8s-base.rendered.yaml \
+		$(BIN_DIR)/k8s-kind.rendered.yaml \
+		$(BIN_DIR)/k8s-release-smoke-test.rendered.yaml
 
 .PHONY: yaml-lint
 yaml-lint: ## yamllint over k8s manifests and workflow files
