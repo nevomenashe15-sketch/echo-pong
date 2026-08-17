@@ -34,17 +34,11 @@ func readSecretFromFile() error {
 		return fmt.Errorf("SECRET_FILE_PATH environment variable not set")
 	}
 
-	// #nosec G304 G703 -- secretPath comes from the operator-controlled SECRET_FILE_PATH
-	// env var (set in the Deployment/Secret volume mount), not from request input.
 	file, err := os.Open(secretPath)
 	if err != nil {
 		return fmt.Errorf("failed to open secret file %s: %v", secretPath, err)
 	}
-	defer func() {
-		if cerr := file.Close(); cerr != nil {
-			log.Printf("⚠️ failed to close secret file %s: %v", secretPath, cerr)
-		}
-	}()
+	defer file.Close()
 
 	secretBytes, err := io.ReadAll(file)
 	if err != nil {
@@ -67,11 +61,9 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		if authHeader == "" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
-			if err := json.NewEncoder(w).Encode(map[string]string{
+			json.NewEncoder(w).Encode(map[string]string{
 				"error": "Authorization header required",
-			}); err != nil {
-				log.Printf("Error encoding auth error response: %v", err)
-			}
+			})
 			log.Printf("🚫 Unauthorized access attempt from %s - missing auth header", r.RemoteAddr)
 			return
 		}
@@ -85,11 +77,9 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		if token != secret {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
-			if err := json.NewEncoder(w).Encode(map[string]string{
+			json.NewEncoder(w).Encode(map[string]string{
 				"error": "Invalid authorization token",
-			}); err != nil {
-				log.Printf("Error encoding auth error response: %v", err)
-			}
+			})
 			log.Printf("🚫 Unauthorized access attempt from %s - invalid token", r.RemoteAddr)
 			return
 		}
@@ -227,14 +217,7 @@ func main() {
 
 	log.Printf("Starting the server")
 
-	srv := &http.Server{
-		Addr:              ":" + port,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-	log.Fatal(srv.ListenAndServe())
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
 func pingHandler(w http.ResponseWriter, r *http.Request) {
@@ -387,9 +370,7 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	if _, err := fmt.Fprint(w, html); err != nil {
-		log.Printf("Error writing root response: %v", err)
-	}
+	fmt.Fprint(w, html)
 
 	log.Printf("📄 Root page served to %s", r.RemoteAddr)
 }
